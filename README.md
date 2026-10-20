@@ -59,4 +59,5 @@ Authentication uses Supabase email/password login (`signInWithPassword`). After 
 - `style.css` — shared grey theme.
 - `app.js` — shared helpers (session checks, logout, date formatting, safe rendering).
 - `config.js` — Supabase URL and anon key, creates the client.
+- `schema.sql` — shared database structure.
 - `README.md` — this file.
