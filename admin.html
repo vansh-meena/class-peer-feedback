@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Class Peer Feedback — Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="app-header-wide">
+  <header class="app-header">
+    <div class="app-header-inner">
+      <h1>Admin</h1>
+      <div class="header-actions">
+        <button class="btn btn-sm" id="logoutBtn">Logout</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page page-wide">
+    <section>
+      <div class="stats" id="stats">
+        <div class="stat"><div class="stat-num" id="statTotal">—</div><div class="stat-label">Total feedback</div></div>
+        <div class="stat"><div class="stat-num" id="statGave">—</div><div class="stat-label">Students who gave</div></div>
+        <div class="stat"><div class="stat-num" id="statReceived">—</div><div class="stat-label">Students who received</div></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="card">
+        <h2 class="card-title">All feedback</h2>
+        <div class="field">
+          <label for="adminSearch">Search by sender, receiver or message</label>
+          <input type="search" id="adminSearch" placeholder="Type a name, reg no, or a word from the message…" autocomplete="off" />
+        </div>
+        <div class="status" id="adminStatus" role="alert"></div>
+        <div class="table-wrap">
+          <table id="feedbackTable">
+            <thead>
+              <tr>
+                <th>From</th>
+                <th>To</th>
+                <th>Message</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody id="feedbackBody">
+              <tr><td colspan="4"><div class="loading">Loading…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="card">
+        <h2 class="card-title">Students who haven't given any feedback yet</h2>
+        <div id="noFeedbackList">
+          <div class="loading">Loading…</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script>
+    (async function () {
+      const guard = await requireRole('admin');
+      if (!guard) return;
+
+      const logoutBtn = document.getElementById('logoutBtn');
+      const adminSearch = document.getElementById('adminSearch');
+      const feedbackBody = document.getElementById('feedbackBody');
+      const adminStatus = document.getElementById('adminStatus');
+      const noFeedbackList = document.getElementById('noFeedbackList');
+      const statTotal = document.getElementById('statTotal');
+      const statGave = document.getElementById('statGave');
+      const statReceived = document.getElementById('statReceived');
+
+      logoutBtn.addEventListener('click', logout);
+
+      let allFeedback = [];
+      let allStudents = [];
+      let gaveIds = new Set();
+
+      async function loadAll() {
+        // Load all feedback with sender + receiver names.
+        const { data: fb, error: fbErr } = await sb
+          .from('feedback')
+          .select('*, sender:profiles!feedback_from_user_fkey(name, reg_no), receiver:profiles!feedback_to_user_fkey(name, reg_no)')
+          .order('created_at', { ascending: false });
+
+        if (fbErr) {
+          showStatus(adminStatus, 'Could not load feedback: ' + errorMessage(fbErr), 'error');
+          feedbackBody.innerHTML = '';
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 4;
+          const box = document.createElement('div');
+          box.className = 'error-box';
+          setText(box, 'Could not load feedback: ' + errorMessage(fbErr));
+          td.appendChild(box);
+          tr.appendChild(td);
+          feedbackBody.appendChild(tr);
+          return;
+        }
+
+        allFeedback = fb || [];
+        gaveIds = new Set(allFeedback.map((r) => r.from_user));
+
+        // Stats
+        statTotal.textContent = String(allFeedback.length);
+        const receivers = new Set(allFeedback.map((r) => r.to_user));
+        statGave.textContent = String(gaveIds.size);
+        statReceived.textContent = String(receivers.size);
+
+        renderTable();
+
+        // Load all students for the "haven't given" list.
+        const { data: students, error: sErr } = await sb
+          .from('profiles')
+          .select('id, name, reg_no, role')
+          .eq('role', 'student')
+          .order('name', { ascending: true });
+
+        if (sErr) {
+          noFeedbackList.innerHTML = '';
+          const box = document.createElement('div');
+          box.className = 'error-box';
+          setText(box, 'Could not load students: ' + errorMessage(sErr));
+          noFeedbackList.appendChild(box);
+          return;
+        }
+
+        allStudents = students || [];
+        renderNoFeedback();
+      }
+
+      function renderTable() {
+        const q = adminSearch.value.trim().toLowerCase();
+        let rows = allFeedback;
+        if (q) {
+          rows = allFeedback.filter((r) => {
+            const fromName = (r.sender && r.sender.name ? r.sender.name : '').toLowerCase();
+            const fromReg = (r.sender && r.sender.reg_no ? r.sender.reg_no : '').toLowerCase();
+            const toName = (r.receiver && r.receiver.name ? r.receiver.name : '').toLowerCase();
+            const toReg = (r.receiver && r.receiver.reg_no ? r.receiver.reg_no : '').toLowerCase();
+            const msg = (r.message || '').toLowerCase();
+            return (
+              fromName.includes(q) || fromReg.includes(q) ||
+              toName.includes(q) || toReg.includes(q) ||
+              msg.includes(q)
+            );
+          });
+        }
+
+        feedbackBody.innerHTML = '';
+        if (rows.length === 0) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 4;
+          const e = document.createElement('div');
+          e.className = 'empty';
+          setText(e, q ? 'No feedback matches your search.' : 'No feedback has been submitted yet.');
+          td.appendChild(e);
+          tr.appendChild(td);
+          feedbackBody.appendChild(tr);
+          return;
+        }
+
+        rows.forEach((r) => {
+          const tr = document.createElement('tr');
+
+          const fromTd = document.createElement('td');
+          const fromName = document.createElement('div');
+          fromName.style.fontWeight = '500';
+          setText(fromName, r.sender ? (r.sender.name || 'Unknown') : 'Unknown');
+          const fromReg = document.createElement('div');
+          fromReg.className = 'muted';
+          fromReg.style.fontSize = '0.8rem';
+          setText(fromReg, r.sender ? (r.sender.reg_no || '') : '');
+          fromTd.appendChild(fromName);
+          fromTd.appendChild(fromReg);
+
+          const toTd = document.createElement('td');
+          const toName = document.createElement('div');
+          toName.style.fontWeight = '500';
+          setText(toName, r.receiver ? (r.receiver.name || 'Unknown') : 'Unknown');
+          const toReg = document.createElement('div');
+          toReg.className = 'muted';
+          toReg.style.fontSize = '0.8rem';
+          setText(toReg, r.receiver ? (r.receiver.reg_no || '') : '');
+          toTd.appendChild(toName);
+          toTd.appendChild(toReg);
+
+          const msgTd = document.createElement('td');
+          msgTd.className = 'msg';
+          setText(msgTd, r.message || '');
+
+          const dateTd = document.createElement('td');
+          setText(dateTd, formatDate(r.created_at));
+
+          tr.appendChild(fromTd);
+          tr.appendChild(toTd);
+          tr.appendChild(msgTd);
+          tr.appendChild(dateTd);
+          feedbackBody.appendChild(tr);
+        });
+      }
+
+      function renderNoFeedback() {
+        const missing = allStudents.filter((s) => !gaveIds.has(s.id));
+        noFeedbackList.innerHTML = '';
+        if (missing.length === 0) {
+          const e = document.createElement('div');
+          e.className = 'empty';
+          setText(e, 'Every student has given at least one piece of feedback.');
+          noFeedbackList.appendChild(e);
+          return;
+        }
+        const list = document.createElement('div');
+        list.className = 'feedback-list';
+        missing.forEach((s) => {
+          const card = document.createElement('div');
+          card.className = 'feedback-card';
+          const head = document.createElement('div');
+          head.className = 'fc-head';
+          const nm = document.createElement('span');
+          nm.className = 'fc-name';
+          setText(nm, s.name || '(no name)');
+          const reg = document.createElement('span');
+          reg.className = 'fc-reg';
+          setText(reg, s.reg_no || '');
+          head.appendChild(nm);
+          head.appendChild(reg);
+          card.appendChild(head);
+          list.appendChild(card);
+        });
+        noFeedbackList.appendChild(list);
+      }
+
+      adminSearch.addEventListener('input', renderTable);
+
+      await loadAll();
+    })();
+  </script>
+</body>
+</html>

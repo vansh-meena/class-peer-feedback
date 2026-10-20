@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Class Peer Feedback — Student</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header-inner">
+      <h1 id="greeting">Hi</h1>
+      <div class="header-actions">
+        <button class="btn btn-sm" id="changePwdBtn">Change password</button>
+        <button class="btn btn-sm" id="logoutBtn">Logout</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section>
+      <div class="card">
+        <h2 class="card-title">Give feedback</h2>
+        <div class="search-box">
+          <label for="searchInput">Search a classmate by name or registration number</label>
+          <input type="search" id="searchInput" placeholder="Type a name or reg no…" autocomplete="off" />
+        </div>
+        <div class="results" id="results">
+          <div class="empty">Start typing to search your classmates.</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="card feedback-panel" id="feedbackPanel">
+        <div class="panel-head">
+          <div>
+            <div class="to-name" id="panelName"></div>
+            <div class="to-reg muted" id="panelReg"></div>
+          </div>
+          <button class="btn btn-sm btn-ghost" id="panelClose">Close</button>
+        </div>
+
+        <div class="field">
+          <label for="messageInput">Your feedback</label>
+          <textarea id="messageInput" maxlength="500" placeholder="Write honest, kind, specific feedback…"></textarea>
+          <div class="counter"><span id="counter">0</span> / 500</div>
+        </div>
+
+        <div class="status" id="panelStatus" role="alert"></div>
+
+        <div class="panel-actions" id="panelActions">
+          <button class="btn btn-primary" id="submitBtn">Submit</button>
+          <button class="btn btn-primary" id="updateBtn" style="display:none">Update</button>
+          <button class="btn btn-danger" id="deleteBtn" style="display:none">Delete</button>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="section-title">Feedback I received</h2>
+      <div class="feedback-list" id="receivedList">
+        <div class="loading">Loading…</div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="section-title">Feedback I gave</h2>
+      <div class="feedback-list" id="gaveList">
+        <div class="loading">Loading…</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Change password modal -->
+  <div class="modal-overlay" id="pwdModal">
+    <div class="modal">
+      <h2>Change password</h2>
+      <div class="field">
+        <label for="newPwd1">New password (min 8 characters)</label>
+        <input type="password" id="newPwd1" autocomplete="new-password" />
+      </div>
+      <div class="field">
+        <label for="newPwd2">Confirm new password</label>
+        <input type="password" id="newPwd2" autocomplete="new-password" />
+      </div>
+      <div class="status" id="pwdStatus" role="alert"></div>
+      <div class="modal-actions">
+        <button class="btn" id="pwdCancel">Cancel</button>
+        <button class="btn btn-primary" id="pwdSave">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script>
+    (async function () {
+      const guard = await requireRole('student');
+      if (!guard) return;
+      const { session, profile } = guard;
+      const myId = session.user.id;
+
+      // --- Element refs ---
+      const greeting = document.getElementById('greeting');
+      const searchInput = document.getElementById('searchInput');
+      const resultsEl = document.getElementById('results');
+      const panel = document.getElementById('feedbackPanel');
+      const panelName = document.getElementById('panelName');
+      const panelReg = document.getElementById('panelReg');
+      const panelStatus = document.getElementById('panelStatus');
+      const messageInput = document.getElementById('messageInput');
+      const counter = document.getElementById('counter');
+      const submitBtn = document.getElementById('submitBtn');
+      const updateBtn = document.getElementById('updateBtn');
+      const deleteBtn = document.getElementById('deleteBtn');
+      const panelClose = document.getElementById('panelClose');
+      const receivedList = document.getElementById('receivedList');
+      const gaveList = document.getElementById('gaveList');
+      const logoutBtn = document.getElementById('logoutBtn');
+
+      // Change password
+      const changePwdBtn = document.getElementById('changePwdBtn');
+      const pwdModal = document.getElementById('pwdModal');
+      const pwdCancel = document.getElementById('pwdCancel');
+      const pwdSave = document.getElementById('pwdSave');
+      const newPwd1 = document.getElementById('newPwd1');
+      const newPwd2 = document.getElementById('newPwd2');
+      const pwdStatus = document.getElementById('pwdStatus');
+
+      // --- State ---
+      let allStudents = [];       // every student profile except me
+      let gaveMap = {};           // to_user -> feedback row I wrote
+      let selected = null;        // currently selected classmate profile
+      let currentRow = null;      // existing feedback row for selected classmate (if any)
+
+      greeting.textContent = 'Hi, ' + (profile.name || 'student');
+
+      logoutBtn.addEventListener('click', logout);
+
+      // --- Load data ---
+      async function loadStudents() {
+        const { data, error } = await sb
+          .from('profiles')
+          .select('id, name, reg_no, role')
+          .eq('role', 'student')
+          .neq('id', myId)
+          .order('name', { ascending: true });
+        if (error) {
+          resultsEl.innerHTML = '';
+          const box = document.createElement('div');
+          box.className = 'error-box';
+          setText(box, 'Could not load classmates: ' + errorMessage(error));
+          resultsEl.appendChild(box);
+          return;
+        }
+        allStudents = data || [];
+        renderResults();
+      }
+
+      async function loadGave() {
+        const { data, error } = await sb
+          .from('feedback')
+          .select('*, receiver:profiles!feedback_to_user_fkey(name, reg_no)')
+          .eq('from_user', myId)
+          .order('created_at', { ascending: false });
+        if (error) {
+          renderError(gaveList, 'Could not load feedback you gave: ' + errorMessage(error));
+          return;
+        }
+        gaveMap = {};
+        (data || []).forEach((row) => {
+          gaveMap[row.to_user] = row;
+        });
+        renderGave(data || []);
+        renderResults(); // refresh "given" tags
+      }
+
+      async function loadReceived() {
+        const { data, error } = await sb
+          .from('feedback')
+          .select('*, sender:profiles!feedback_from_user_fkey(name, reg_no)')
+          .eq('to_user', myId)
+          .order('created_at', { ascending: false });
+        if (error) {
+          renderError(receivedList, 'Could not load feedback you received: ' + errorMessage(error));
+          return;
+        }
+        renderReceived(data || []);
+      }
+
+      // --- Rendering ---
+      function renderResults() {
+        const q = searchInput.value.trim().toLowerCase();
+        let list = allStudents;
+        if (q) {
+          list = allStudents.filter((s) => {
+            const name = (s.name || '').toLowerCase();
+            const reg = (s.reg_no || '').toLowerCase();
+            return name.includes(q) || reg.includes(q);
+          });
+        }
+        resultsEl.innerHTML = '';
+        if (!q) {
+          const e = document.createElement('div');
+          e.className = 'empty';
+          setText(e, 'Start typing to search your classmates.');
+          resultsEl.appendChild(e);
+          return;
+        }
+        if (list.length === 0) {
+          const e = document.createElement('div');
+          e.className = 'empty';
+          setText(e, 'No classmates match your search.');
+          resultsEl.appendChild(e);
+          return;
+        }
+        list.slice(0, 8).forEach((s) => {
+          const item = document.createElement('div');
+          item.className = 'result-item';
+          item.dataset.id = s.id;
+
+          const who = document.createElement('div');
+          who.className = 'who';
+          const name = document.createElement('span');
+          name.className = 'name';
+          setText(name, s.name || '(no name)');
+          const reg = document.createElement('span');
+          reg.className = 'reg';
+          setText(reg, s.reg_no || '');
+          who.appendChild(name);
+          who.appendChild(reg);
+
+          item.appendChild(who);
+
+          if (gaveMap[s.id]) {
+            const tag = document.createElement('span');
+            tag.className = 'tag';
+            setText(tag, 'given');
+            item.appendChild(tag);
+          }
+
+          item.addEventListener('click', () => openClassmate(s));
+          resultsEl.appendChild(item);
+        });
+      }
+
+      function renderReceived(rows) {
+        receivedList.innerHTML = '';
+        if (rows.length === 0) {
+          const e = document.createElement('div');
+          e.className = 'empty';
+          setText(e, 'No feedback received yet.');
+          receivedList.appendChild(e);
+          return;
+        }
+        rows.forEach((row) => {
+          receivedList.appendChild(buildCard({
+            name: row.sender ? row.sender.name : 'Unknown',
+            reg: row.sender ? row.sender.reg_no : '',
+            message: row.message,
+            date: row.created_at,
+            editable: false,
+          }));
+        });
+      }
+
+      function renderGave(rows) {
+        gaveList.innerHTML = '';
+        if (rows.length === 0) {
+          const e = document.createElement('div');
+          e.className = 'empty';
+          setText(e, 'You have not given any feedback yet.');
+          gaveList.appendChild(e);
+          return;
+        }
+        rows.forEach((row) => {
+          const editable = within30Days(row.created_at);
+          const card = buildCard({
+            name: row.receiver ? row.receiver.name : 'Unknown',
+            reg: row.receiver ? row.receiver.reg_no : '',
+            message: row.message,
+            date: row.created_at,
+            editable,
+            onEdit: editable ? () => {
+              const classmate = allStudents.find((s) => s.id === row.to_user) ||
+                { id: row.to_user, name: row.receiver ? row.receiver.name : '', reg_no: row.receiver ? row.receiver.reg_no : '' };
+              openClassmate(classmate, row);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            } : null,
+            onDelete: editable ? () => deleteGaveRow(row) : null,
+          });
+          gaveList.appendChild(card);
+        });
+      }
+
+      function buildCard(opts) {
+        const card = document.createElement('div');
+        card.className = 'feedback-card';
+
+        const head = document.createElement('div');
+        head.className = 'fc-head';
+        const left = document.createElement('div');
+        const nm = document.createElement('span');
+        nm.className = 'fc-name';
+        setText(nm, opts.name || 'Unknown');
+        const reg = document.createElement('span');
+        reg.className = 'fc-reg';
+        setText(reg, opts.reg || '');
+        left.appendChild(nm);
+        left.appendChild(reg);
+        const date = document.createElement('span');
+        date.className = 'fc-date';
+        setText(date, formatDate(opts.date));
+        head.appendChild(left);
+        head.appendChild(date);
+        card.appendChild(head);
+
+        const msg = document.createElement('div');
+        msg.className = 'fc-message';
+        setText(msg, opts.message || '');
+        card.appendChild(msg);
+
+        if (opts.editable || opts.onEdit || opts.onDelete) {
+          const actions = document.createElement('div');
+          actions.className = 'fc-actions';
+          if (opts.onEdit) {
+            const editBtn = document.createElement('button');
+            editBtn.className = 'btn btn-sm';
+            setText(editBtn, 'Edit');
+            editBtn.addEventListener('click', opts.onEdit);
+            actions.appendChild(editBtn);
+          }
+          if (opts.onDelete) {
+            const delBtn = document.createElement('button');
+            delBtn.className = 'btn btn-sm btn-danger';
+            setText(delBtn, 'Delete');
+            delBtn.addEventListener('click', opts.onDelete);
+            actions.appendChild(delBtn);
+          }
+          if (!opts.editable) {
+            const lock = document.createElement('span');
+            lock.className = 'locked-label';
+            setText(lock, 'Locked');
+            actions.appendChild(lock);
+          }
+          card.appendChild(actions);
+        }
+
+        return card;
+      }
+
+      function renderError(container, message) {
+        container.innerHTML = '';
+        const box = document.createElement('div');
+        box.className = 'error-box';
+        setText(box, message);
+        container.appendChild(box);
+      }
+
+      // --- Feedback panel ---
+      function openClassmate(classmate, existingRow) {
+        selected = classmate;
+        currentRow = existingRow || gaveMap[classmate.id] || null;
+        setText(panelName, classmate.name || '(no name)');
+        setText(panelReg, classmate.reg_no || '');
+        messageInput.value = currentRow ? (currentRow.message || '') : '';
+        updateCounter();
+        showStatus(panelStatus, '', '');
+
+        if (currentRow) {
+          submitBtn.style.display = 'none';
+          updateBtn.style.display = '';
+          deleteBtn.style.display = '';
+        } else {
+          submitBtn.style.display = '';
+          updateBtn.style.display = 'none';
+          deleteBtn.style.display = 'none';
+        }
+
+        panel.classList.add('open');
+      }
+
+      function closePanel() {
+        panel.classList.remove('open');
+        selected = null;
+        currentRow = null;
+        messageInput.value = '';
+        updateCounter();
+        showStatus(panelStatus, '', '');
+      }
+
+      function updateCounter() {
+        counter.textContent = String(messageInput.value.length);
+      }
+
+      messageInput.addEventListener('input', updateCounter);
+      panelClose.addEventListener('click', closePanel);
+
+      // --- Insert ---
+      submitBtn.addEventListener('click', async () => {
+        if (!selected) return;
+        const message = messageInput.value.trim();
+        if (!message) {
+          showStatus(panelStatus, 'Please write a message before submitting.', 'error');
+          return;
+        }
+        if (message.length > 500) {
+          showStatus(panelStatus, 'Message must be 500 characters or fewer.', 'error');
+          return;
+        }
+        await withBusy(submitBtn, async () => {
+          let data, error;
+          try {
+            ({ data, error } = await sb
+              .from('feedback')
+              .insert({ from_user: myId, to_user: selected.id, message })
+              .select()
+              .single());
+          } catch (netErr) {
+            showStatus(panelStatus, 'Network error. Please try again.', 'error');
+            return;
+          }
+          if (error) {
+            // Unique violation: feedback already exists for this pair.
+            if (error.code === '23505' || /duplicate|already/i.test(error.message || '')) {
+              showStatus(panelStatus, 'You have already given feedback to this person.', 'error');
+              // Switch to edit view by reloading the existing row.
+              await loadGave();
+              const existing = gaveMap[selected.id];
+              if (existing) {
+                currentRow = existing;
+                messageInput.value = existing.message || '';
+                updateCounter();
+                submitBtn.style.display = 'none';
+                updateBtn.style.display = '';
+                deleteBtn.style.display = '';
+              }
+            } else {
+              showStatus(panelStatus, errorMessage(error, 'Could not save feedback.'), 'error');
+            }
+            return;
+          }
+          gaveMap[selected.id] = data;
+          currentRow = data;
+          submitBtn.style.display = 'none';
+          updateBtn.style.display = '';
+          deleteBtn.style.display = '';
+          showStatus(panelStatus, 'Feedback saved.', 'success');
+          await loadGave();
+        });
+      });
+
+      // --- Update ---
+      updateBtn.addEventListener('click', async () => {
+        if (!selected || !currentRow) return;
+        const message = messageInput.value.trim();
+        if (!message) {
+          showStatus(panelStatus, 'Please write a message before updating.', 'error');
+          return;
+        }
+        if (message.length > 500) {
+          showStatus(panelStatus, 'Message must be 500 characters or fewer.', 'error');
+          return;
+        }
+        await withBusy(updateBtn, async () => {
+          let data, error;
+          try {
+            ({ data, error } = await sb
+              .from('feedback')
+              .update({ message, updated_at: new Date().toISOString() })
+              .eq('id', currentRow.id)
+              .eq('from_user', myId)
+              .select());
+          } catch (netErr) {
+            showStatus(panelStatus, 'Network error. Please try again.', 'error');
+            return;
+          }
+          if (error) {
+            showStatus(panelStatus, errorMessage(error, 'Could not update feedback.'), 'error');
+            return;
+          }
+          if (!data || data.length === 0) {
+            showStatus(panelStatus, 'Editing and deleting are locked 30 days after posting.', 'error');
+            return;
+          }
+          currentRow = data[0];
+          gaveMap[selected.id] = currentRow;
+          showStatus(panelStatus, 'Feedback updated.', 'success');
+          await loadGave();
+        });
+      });
+
+      // --- Delete (from panel) ---
+      async function deleteCurrentRow() {
+        if (!selected || !currentRow) return;
+        if (!confirm('Delete the feedback you wrote for ' + (selected.name || 'this classmate') + '? This cannot be undone.')) {
+          return;
+        }
+        await withBusy(deleteBtn, async () => {
+          let data, error;
+          try {
+            ({ data, error } = await sb
+              .from('feedback')
+              .delete()
+              .eq('id', currentRow.id)
+              .eq('from_user', myId)
+              .select());
+          } catch (netErr) {
+            showStatus(panelStatus, 'Network error. Please try again.', 'error');
+            return;
+          }
+          if (error) {
+            showStatus(panelStatus, errorMessage(error, 'Could not delete feedback.'), 'error');
+            return;
+          }
+          if (!data || data.length === 0) {
+            showStatus(panelStatus, 'Editing and deleting are locked 30 days after posting.', 'error');
+            return;
+          }
+          delete gaveMap[selected.id];
+          currentRow = null;
+          messageInput.value = '';
+          updateCounter();
+          submitBtn.style.display = '';
+          updateBtn.style.display = 'none';
+          deleteBtn.style.display = 'none';
+          showStatus(panelStatus, 'Feedback deleted.', 'success');
+          await loadGave();
+        });
+      }
+      deleteBtn.addEventListener('click', deleteCurrentRow);
+
+      // --- Delete (from "Feedback I gave" card) ---
+      async function deleteGaveRow(row) {
+        if (!confirm('Delete this feedback? This cannot be undone.')) return;
+        let data, error;
+        try {
+          ({ data, error } = await sb
+            .from('feedback')
+            .delete()
+            .eq('id', row.id)
+            .eq('from_user', myId)
+            .select());
+        } catch (netErr) {
+          renderError(gaveList, 'Network error. Please try again.');
+          return;
+        }
+        if (error) {
+          renderError(gaveList, errorMessage(error, 'Could not delete feedback.'));
+          return;
+        }
+        if (!data || data.length === 0) {
+          renderError(gaveList, 'Editing and deleting are locked 30 days after posting.');
+          // Reload to keep state consistent.
+          await loadGave();
+          return;
+        }
+        await loadGave();
+        if (selected && selected.id === row.to_user && currentRow && currentRow.id === row.id) {
+          currentRow = null;
+          messageInput.value = '';
+          updateCounter();
+          submitBtn.style.display = '';
+          updateBtn.style.display = 'none';
+          deleteBtn.style.display = 'none';
+        }
+      }
+
+      // --- Search ---
+      searchInput.addEventListener('input', renderResults);
+
+      // --- Change password ---
+      function openPwdModal() {
+        newPwd1.value = '';
+        newPwd2.value = '';
+        showStatus(pwdStatus, '', '');
+        pwdModal.classList.add('open');
+        newPwd1.focus();
+      }
+      function closePwdModal() {
+        pwdModal.classList.remove('open');
+      }
+      changePwdBtn.addEventListener('click', openPwdModal);
+      pwdCancel.addEventListener('click', closePwdModal);
+      pwdModal.addEventListener('click', (e) => {
+        if (e.target === pwdModal) closePwdModal();
+      });
+
+      pwdSave.addEventListener('click', async () => {
+        const p1 = newPwd1.value;
+        const p2 = newPwd2.value;
+        if (p1.length < 8) {
+          showStatus(pwdStatus, 'New password must be at least 8 characters.', 'error');
+          return;
+        }
+        if (p1 !== p2) {
+          showStatus(pwdStatus, 'The two passwords do not match.', 'error');
+          return;
+        }
+        await withBusy(pwdSave, async () => {
+          let data, error;
+          try {
+            ({ data, error } = await sb.auth.updateUser({ password: p1 }));
+          } catch (netErr) {
+            showStatus(pwdStatus, 'Network error. Please try again.', 'error');
+            return;
+          }
+          if (error) {
+            showStatus(pwdStatus, errorMessage(error, 'Could not change password.'), 'error');
+            return;
+          }
+          showStatus(pwdStatus, 'Password updated.', 'success');
+          setTimeout(closePwdModal, 1200);
+        });
+      });
+
+      // --- Initial load ---
+      await Promise.all([loadStudents(), loadReceived(), loadGave()]);
+    })();
+  </script>
+</body>
+</html>

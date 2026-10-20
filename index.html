@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Class Peer Feedback — Sign in</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="style.css" />
+  <meta property="og:image" content="https://bolt.new/static/og_default.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://bolt.new/static/og_default.png">
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <h1>Class Peer Feedback</h1>
+      <p class="subtitle">Sign in with your class account.</p>
+
+      <form id="loginForm" autocomplete="on" novalidate>
+        <div class="field">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required autocomplete="username" placeholder="you@school.edu" />
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="Your password" />
+        </div>
+        <div class="status" id="loginStatus" role="alert"></div>
+        <button type="submit" class="btn btn-primary" id="loginBtn">Sign in</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script>
+    (async function () {
+      // If already signed in, send the user to the right page.
+      try {
+        const { data: { session } } = await sb.auth.getSession();
+        if (session) {
+          const { data: profile } = await sb
+            .from('profiles')
+            .select('role')
+            .eq('id', session.user.id)
+            .single();
+          if (profile && profile.role === 'admin') {
+            window.location.href = 'admin.html';
+            return;
+          }
+          if (profile && profile.role === 'student') {
+            window.location.href = 'app.html';
+            return;
+          }
+        }
+      } catch (_) {
+        // stay on login
+      }
+
+      const form = document.getElementById('loginForm');
+      const emailEl = document.getElementById('email');
+      const passwordEl = document.getElementById('password');
+      const statusEl = document.getElementById('loginStatus');
+      const btn = document.getElementById('loginBtn');
+
+      form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        showStatus(statusEl, '', '');
+
+        const email = emailEl.value.trim();
+        const password = passwordEl.value;
+        if (!email || !password) {
+          showStatus(statusEl, 'Please enter your email and password.', 'error');
+          return;
+        }
+
+        await withBusy(btn, async () => {
+          let data, error;
+          try {
+            ({ data, error } = await sb.auth.signInWithPassword({ email, password }));
+          } catch (netErr) {
+            showStatus(statusEl, 'Network error. Please check your connection and try again.', 'error');
+            return;
+          }
+
+          if (error || !data || !data.session) {
+            showStatus(statusEl, 'Invalid email or password.', 'error');
+            return;
+          }
+
+          // Read the profile to decide where to go.
+          let profile, perr;
+          try {
+            ({ data: profile, error: perr } = await sb
+              .from('profiles')
+              .select('role')
+              .eq('id', data.session.user.id)
+              .single());
+          } catch (netErr) {
+            showStatus(statusEl, 'Signed in, but we could not load your profile. Try again.', 'error');
+            return;
+          }
+
+          if (perr || !profile) {
+            showStatus(statusEl, 'Signed in, but no profile was found for this account.', 'error');
+            return;
+          }
+
+          if (profile.role === 'admin') {
+            window.location.href = 'admin.html';
+          } else if (profile.role === 'student') {
+            window.location.href = 'app.html';
+          } else {
+            showStatus(statusEl, 'This account does not have a recognised role.', 'error');
+          }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
